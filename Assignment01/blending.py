@@ -1,0 +1,86 @@
+# install the libraries
+import numpy as np
+from scipy import ndimage
+import cv2
+import imageio
+
+# create a  Binomial (5-tap) filter
+kernel = (1.0/256)*np.array([[1, 4, 6, 4, 1],[4, 16, 24, 16, 4],[6, 24, 36, 24, 6], [4, 16, 24, 16, 4],[1, 4, 6, 4, 1]])
+
+def upscale(image):
+  image_up = np.zeros((2*image.shape[0], 2*image.shape[1]))
+  image_up[::2, ::2] = image
+  return ndimage.filters.convolve(image_up,4*kernel, mode='constant')
+                                
+def downscale(image):
+  print(np.shape(image), np.shape(kernel))
+  image_blur = ndimage.filters.convolve(image,kernel, mode='constant')
+  return image_blur[::2, ::2]                                
+                                            
+#Build gaussian and laplacian pyramids
+def pyramids(image):
+  # Initialize pyramids
+  Gaussian = [image, ]
+  Laplacian = []
+
+  # Build the Gaussian pyramid till the maximum possible region
+  while image.shape[0] >= 2 and image.shape[1] >= 2:
+    image = downscale(image)
+    Gaussian.append(image)
+
+  # Build the Laplacian pyramid
+
+  for i in range(len(Gaussian) - 1):
+    size = (Gaussian[i-1].shape[1], Gaussian[i-1].shape[0])
+    gaussian_expanded = cv2.pyrUp(Gaussian[i], dstsize=size)
+    laplacian = cv2.subtract(Gaussian[i-1], gaussian_expanded)
+    cv2.imshow('result',laplacian)
+    cv2.waitKey(100)
+    #Laplacian.append(Gaussian[i] - upscale(Gaussian[i + 1]))
+  return Gaussian[:-1], Laplacian
+
+# Build Gaussian pyramid and Laplacian pyramids from apple,  orange and mask
+def blending(A, B, mask):
+  [G_apple, L_apple] = pyramids(A)
+  [G_orange ,L_orange] = pyramids(B)
+  # Build a Gaussian pyramid GR from selected region R 
+  [g_mask, l_mask] = pyramids(mask)
+
+  # Collapse the LS pyramid to get the final blended image
+  blend = []
+  for i in range(len(L_apple)):
+    laplacian_sum = g_mask[i]/255*L_apple[i] + (1-g_mask[i]/255)*L_orange[i]
+    blend.append(laplacian_sum)
+  return blend
+
+# reconstruct the pyramids as well as upsampling and add up with each level
+def reconstruct(pyramid):
+  revPyramid = pyramid[::-1]
+  stack = revPyramid[0]
+  for i in range(1, len(revPyramid)):
+    stack = upscale(stack) + revPyramid[i]
+  return stack
+
+#Colour blending
+def color_blending(a, o, m):
+  aR,aG,aB = cv2.split(a)
+  oR,oG,oB = cv2.split(o)
+
+  Red = reconstruct(blending(aR, oR, m))
+  Green = reconstruct(blending(aG, oG, m))
+  Blue = reconstruct(blending(aB, oB, m))
+
+  output = cv2.merge((Red, Green, Blue))
+
+  imageio.imsave("output.png", output)
+  img = cv2.imread("output.png")
+
+  cv2.imshow('result',img)
+  cv2.waitKey(0)
+  cv2.destroyAllWindows()
+
+apple = imageio.imread('apple.jpg')
+orange = imageio.imread('orange.jpg')
+mask = cv2.imread('mask.jpg', 0)
+
+color_blending(apple, orange, mask)
